@@ -1,0 +1,361 @@
+{
+  "name": "Material Management Workflow - FIXED",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = ($json.messageText || '').toLowerCase().trim();\nlet action = 'unknown';\n\n// ИСПРАВЛЕНИЕ: Улучшенное определение действий\nif (text.startsWith('/загрузка') || text.startsWith('/load')) {\n  action = 'bunker_load';\n} else if (text.startsWith('/остатки') || text.startsWith('/stock')) {\n  action = 'stock_check';\n} else if (text === '📦 остатки' || text === 'остатки') {\n  action = 'stock_check';\n} else if (text.includes('загрузка') || text.includes('загрузить')) {\n  action = 'bunker_load';\n}\n\nconsole.log(`Определено действие: ${action} для текста: ${text}`);\nreturn { ...$input.item.json, action: action };"
+      },
+      "name": "Determine Material Action - FIXED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "value2": "bunker_load",
+              "operation": "equals"
+            },
+            {
+              "value1": "={{$json.action}}",
+              "value2": "stock_check",
+              "operation": "equals"
+            }
+          ]
+        }
+      },
+      "name": "Route Material Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const messageText = $json.messageText || '';\n\n// ИСПРАВЛЕНИЕ: Более надежный парсинг команды загрузки\nconst cleanText = messageText.trim();\nconst parts = cleanText.split(/\\s+/); // Разделяем по любому количеству пробелов\n\nif (parts.length < 4) {\n  return { \n    error: 'Неверный формат команды.\\n\\n📝 *Правильный формат:*\\n`/загрузка [БУНКЕР] [МАТЕРИАЛ] [КОЛИЧЕСТВО]`\\n\\n💡 *Пример:*\\n`/загрузка БЦ1 цемент 50`' \n  };\n}\n\nconst bunkerId = parts[1].toUpperCase().trim();\nconst materialName = parts[2].toLowerCase().trim();\nconst quantityStr = parts[3].trim();\n\n// ИСПРАВЛЕНИЕ: Улучшенная валидация количества\nconst quantity = parseFloat(quantityStr.replace(',', '.'));\n\nif (isNaN(quantity) || quantity <= 0) {\n  return { \n    error: `❌ Некорректное количество: \"${quantityStr}\"\\n\\n✅ Количество должно быть положительным числом\\n💡 Например: 50 или 25.5` \n  };\n}\n\nif (quantity > 1000) {\n  return { \n    error: `⚠️ Слишком большое количество: ${quantity} тонн\\n\\n🔒 Максимум за одну загрузку: 1000 тонн\\nДля больших объемов разделите на несколько операций.` \n  };\n}\n\n// ИСПРАВЛЕНИЕ: Проверка корректности ID бункера\nif (!/^[А-Я]{1,3}\\d{1,2}$/i.test(bunkerId)) {\n  return { \n    error: `❌ Некорректный ID бункера: \"${bunkerId}\"\\n\\n✅ Правильный формат: БЦ1, БИ2, БП3\\n💡 Буквы и цифры без пробелов` \n  };\n}\n\nconsole.log(`Парсинг загрузки: бункер=${bunkerId}, материал=${materialName}, количество=${quantity}`);\n\nreturn {\n  bunker_id: bunkerId,\n  material_name: materialName,\n  quantity_loaded: quantity,\n  original_command: messageText\n};"
+      },
+      "name": "Parse Load Command - FIXED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.error}}",
+              "value2": "",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "Check Parse Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.error}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Parse Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 40]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT material_id, material_name, current_stock, minimum_stock FROM materials WHERE LOWER(material_name) LIKE LOWER(CONCAT('%', ?, '%')) LIMIT 1;",
+        "options": {
+          "parameters": "=[{{$json.material_name}}]"
+        }
+      },
+      "name": "Get Material ID - FIXED",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [1340, 160]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.length}}",
+              "value2": 0,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Material Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1560, 160]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "❌ *Материал не найден*\\n\\nМатериал \"{{$('Parse Load Command - FIXED').item.json.material_name}}\" отсутствует в базе данных.\\n\\n📋 *Доступные материалы:*\\n• цемент\\n• известь\\n• песок\\n• алюминий\\n\\n💡 Проверьте правильность написания.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Material Not Found",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1780, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT bunker_id, bunker_name, current_amount, max_capacity FROM bunkers WHERE bunker_id = ? AND status = 'active';",
+        "options": {
+          "parameters": "=[{{$('Parse Load Command - FIXED').item.json.bunker_id}}]"
+        }
+      },
+      "name": "Check Bunker Exists",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [1780, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.length}}",
+              "value2": 0,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Bunker Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2000, 220]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "❌ *Бункер не найден*\\n\\nБункер \"{{$('Parse Load Command - FIXED').item.json.bunker_id}}\" не существует или неактивен.\\n\\n📋 *Проверьте:*\\n• Правильность ID бункера\\n• Статус бункера (активен/на обслуживании)\\n\\n💡 Обратитесь к оператору за актуальным списком бункеров.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Bunker Not Found",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2220, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "const bunkerData = $('Check Bunker Exists').item.json[0];\nconst loadData = $('Parse Load Command - FIXED').item.json;\n\nconst newAmount = bunkerData.current_amount + loadData.quantity_loaded;\n\nif (newAmount > bunkerData.max_capacity) {\n  const availableSpace = bunkerData.max_capacity - bunkerData.current_amount;\n  return {\n    error: true,\n    message: `⚠️ *Превышение вместимости бункера*\\n\\nБункер: ${bunkerData.bunker_id}\\nТекущий остаток: ${bunkerData.current_amount} тонн\\nМаксимальная вместимость: ${bunkerData.max_capacity} тонн\\nДоступно места: ${availableSpace.toFixed(1)} тонн\\n\\n❌ Попытка загрузить: ${loadData.quantity_loaded} тонн\\n\\n💡 Загрузите не более ${availableSpace.toFixed(1)} тонн или освободите бункер.`\n  };\n}\n\nreturn {\n  error: false,\n  bunker_data: bunkerData,\n  new_amount: newAmount\n};"
+      },
+      "name": "Check Capacity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [2220, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.error}}",
+              "value2": true,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Capacity Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2440, 280]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Capacity Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2660, 220]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO bunker_loads (bunker_id, material_id, loaded_by_id, quantity_loaded) SELECT ?, ?, e.employee_id, ? FROM employees e WHERE e.telegram_id = ? AND e.is_active = 1;",
+        "options": {
+          "parameters": "=[{{$('Parse Load Command - FIXED').item.json.bunker_id}}, {{$('Get Material ID - FIXED').item.json[0].material_id}}, {{$('Parse Load Command - FIXED').item.json.quantity_loaded}}, {{$input.item.json.userId}}]"
+        }
+      },
+      "name": "Log Bunker Load - FIXED",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [2660, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.affectedRows}}",
+              "value2": 0,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Load Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2880, 340]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "❌ *Ошибка регистрации загрузки*\\n\\nВозможные причины:\\n• Вы не зарегистрированы в системе\\n• Ваш аккаунт неактивен\\n\\n💡 Обратитесь к администратору для регистрации.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Load Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [3100, 280]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "✅ *Загрузка успешно зарегистрирована*\\n\\n📦 **Детали операции:**\\nБункер: {{$('Parse Load Command - FIXED').item.json.bunker_id}}\\nМатериал: {{$('Get Material ID - FIXED').item.json[0].material_name}}\\nКоличество: {{$('Parse Load Command - FIXED').item.json.quantity_loaded}} тонн\\n\\n📊 **Текущий остаток в бункере:**\\n{{$('Check Capacity').item.json.new_amount}} тонн\\n\\n💾 Данные автоматически обновлены в системе.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Confirm Load - ENHANCED",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [3100, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CALL GetCriticalStock()",
+        "options": {}
+      },
+      "name": "Get Critical Stock",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ИСПРАВЛЕНИЕ: Правильная обработка результатов хранимой процедуры\nconst results = items[0].json;\nlet criticalMaterials = [];\n\n// Проверяем разные возможные структуры ответа\nif (Array.isArray(results)) {\n  criticalMaterials = results;\n} else if (results && results[0] && Array.isArray(results[0])) {\n  criticalMaterials = results[0];\n} else if (results && Array.isArray(results.data)) {\n  criticalMaterials = results.data;\n}\n\nconsole.log('Критические остатки:', JSON.stringify(criticalMaterials));\n\nif (!criticalMaterials || criticalMaterials.length === 0) {\n  return { \n    message: '✅ *Остатки материалов в норме*\\n\\n🎯 Все материалы имеют достаточный запас.\\n📊 Критических остатков не обнаружено.\\n\\n💡 Регулярно проверяйте остатки для поддержания производства.' \n  };\n}\n\nlet message = '🚨 *КРИТИЧЕСКИЕ ОСТАТКИ МАТЕРИАЛОВ*\\n\\n';\nmessage += `⚠️ Обнаружено материалов с низкими остатками: **${criticalMaterials.length}**\\n\\n`;\n\nfor (const material of criticalMaterials) {\n  const stockPercentage = ((material.current_stock / material.minimum_stock) * 100).toFixed(1);\n  \n  message += `🔴 **${material.material_name.toUpperCase()}**\\n`;\n  message += `   📦 Остаток: ${material.current_stock} ${material.unit_of_measure}\\n`;\n  message += `   🎯 Минимум: ${material.minimum_stock} ${material.unit_of_measure}\\n`;\n  message += `   📊 Уровень: ${stockPercentage}% от минимума\\n`;\n  message += `───────────────\\n`;\n}\n\nmessage += '\\n🚨 **Требуется срочное пополнение!**\\n';\nmessage += '💡 Свяжитесь с отделом снабжения.';\n\nreturn { message };"
+      },
+      "name": "Format Stock Report - FIXED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Stock Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 500]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Determine Material Action - FIXED", "type": "main", "index": 0}]]
+    },
+    "Determine Material Action - FIXED": {
+      "main": [[{"node": "Route Material Action", "type": "main", "index": 0}]]
+    },
+    "Route Material Action": {
+      "main": [
+        [{"node": "Parse Load Command - FIXED", "type": "main", "index": 0}],
+        [{"node": "Get Critical Stock", "type": "main", "index": 0}]
+      ]
+    },
+    "Parse Load Command - FIXED": {
+      "main": [[{"node": "Check Parse Error", "type": "main", "index": 0}]]
+    },
+    "Check Parse Error": {
+      "main": [
+        [{"node": "Send Parse Error", "type": "main", "index": 0}],
+        [{"node": "Get Material ID - FIXED", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Material ID - FIXED": {
+      "main": [[{"node": "Check Material Found", "type": "main", "index": 0}]]
+    },
+    "Check Material Found": {
+      "main": [
+        [{"node": "Send Material Not Found", "type": "main", "index": 0}],
+        [{"node": "Check Bunker Exists", "type": "main", "index": 0}]
+      ]
+    },
+    "Check Bunker Exists": {
+      "main": [[{"node": "Check Bunker Found", "type": "main", "index": 0}]]
+    },
+    "Check Bunker Found": {
+      "main": [
+        [{"node": "Send Bunker Not Found", "type": "main", "index": 0}],
+        [{"node": "Check Capacity", "type": "main", "index": 0}]
+      ]
+    },
+    "Check Capacity": {
+      "main": [[{"node": "Check Capacity Error", "type": "main", "index": 0}]]
+    },
+    "Check Capacity Error": {
+      "main": [
+        [{"node": "Send Capacity Error", "type": "main", "index": 0}],
+        [{"node": "Log Bunker Load - FIXED", "type": "main", "index": 0}]
+      ]
+    },
+    "Log Bunker Load - FIXED": {
+      "main": [[{"node": "Check Load Success", "type": "main", "index": 0}]]
+    },
+    "Check Load Success": {
+      "main": [
+        [{"node": "Send Load Error", "type": "main", "index": 0}],
+        [{"node": "Confirm Load - ENHANCED", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Critical Stock": {
+      "main": [[{"node": "Format Stock Report - FIXED", "type": "main", "index": 0}]]
+    },
+    "Format Stock Report - FIXED": {
+      "main": [[{"node": "Send Stock Report", "type": "main", "index": 0}]]
+    }
+  }
+}

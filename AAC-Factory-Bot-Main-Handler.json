@@ -1,0 +1,192 @@
+{
+    "name": "AAC Factory Bot Main Handler - FIXED",
+    "nodes": [
+      {
+        "parameters": {
+          "updates": [
+            "message",
+            "callback_query"
+          ]
+        },
+        "name": "Telegram Bot Trigger",
+        "type": "n8n-nodes-base.telegramTrigger",
+        "typeVersion": 1,
+        "position": [240, 300],
+        "credentials": {
+          "telegramApi": {
+            "id": "telegram-bot-credentials",
+            "name": "Telegram Bot АAC"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const item = items[0].json;\nlet eventType = 'unknown';\nlet userId = null;\nlet chatId = null;\nlet messageText = '';\nlet callbackData = '';\nlet hasPhoto = false;\n\ntry {\n  if (item.message) {\n    userId = item.message.from.id;\n    chatId = item.message.chat.id;\n    messageText = item.message.text || '';\n    hasPhoto = !!(item.message.photo && item.message.photo.length > 0);\n    \n    const text = messageText.toLowerCase().trim();\n\n    // ИСПРАВЛЕНИЕ: Улучшенная логика определения команд\n    if (text.startsWith('/start')) {\n      eventType = 'start';\n    } else if (text.startsWith('/моя_смена') || text.startsWith('/shift')) {\n      eventType = 'shift_management';\n    } else if (text.startsWith('/брак') || text.startsWith('/defect') || hasPhoto) {\n      eventType = 'defect_report';\n    } else if (text.startsWith('/рецепт') || text.startsWith('/recipe')) {\n      eventType = 'recipe_search';\n    } else if (text.startsWith('/загрузка') || text.startsWith('/load') || text.startsWith('/остатки') || text.startsWith('/stock')) {\n      eventType = 'material_management';\n    } else if (text.startsWith('/помощь') || text.startsWith('/help')) {\n      eventType = 'help';\n    }\n\n  } else if (item.callback_query) {\n    userId = item.callback_query.from.id;\n    chatId = item.callback_query.message.chat.id;\n    callbackData = item.callback_query.data;\n\n    if (callbackData.startsWith('shift_')) {\n      eventType = 'shift_management';\n    } else if (callbackData.startsWith('defect_')) {\n      eventType = 'defect_report';\n    } else if (callbackData.startsWith('material_')) {\n      eventType = 'material_management';\n    }\n  }\n\n  // ИСПРАВЛЕНИЕ: Добавляем валидацию данных\n  if (!userId || !chatId) {\n    throw new Error('Отсутствуют обязательные данные пользователя');\n  }\n\n  return [{\n    json: {\n      eventType: eventType,\n      userId: userId,\n      chatId: chatId,\n      messageText: messageText,\n      callbackData: callbackData,\n      hasPhoto: hasPhoto,\n      originalData: item\n    }\n  }];\n} catch (error) {\n  console.error('Ошибка обработки события:', error.message);\n  return [{\n    json: {\n      eventType: 'error',\n      error: error.message,\n      userId: userId,\n      chatId: chatId,\n      originalData: item\n    }\n  }];\n}"
+        },
+        "name": "Process Event - FIXED",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [460, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "string": [
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "start",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "shift_management",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "defect_report",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "recipe_search",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "material_management",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "help",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$json.eventType}}",
+                "value2": "error",
+                "operation": "equals"
+              }
+            ]
+          }
+        },
+        "name": "Route Events - FIXED",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 1,
+        "position": [680, 300]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$json.chatId}}",
+          "text": "🏭 *Добро пожаловать на завод ААС!*\n\nЯ ваш цифровой помощник для управления производством.\n\n📋 *Доступные команды:*\n/моя_смена - Управление сменой\n/рецепт [название] - Поиск рецепта\n/брак - Сообщить о браке (+ фото)\n/загрузка [бункер] [материал] [кол-во] - Загрузка материала\n/остатки - Проверить критические остатки\n/помощь - Показать эту справку\n\n⚡ *Для быстрого доступа используйте кнопки меню.*",
+          "additionalFields": {
+            "parse_mode": "Markdown",
+            "reply_markup": "{\n  \"keyboard\": [\n    [{\"text\": \"📊 Моя смена\"}, {\"text\": \"📋 Рецепты\"}],\n    [{\"text\": \"⚠️ Сообщить о браке\"}, {\"text\": \"📦 Остатки\"}]\n  ],\n  \"resize_keyboard\": true,\n  \"one_time_keyboard\": false\n}"
+          }
+        },
+        "name": "Send Welcome - ENHANCED",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [900, -120],
+        "credentials": {
+          "telegramApi": {
+            "id": "telegram-bot-credentials",
+            "name": "Telegram Bot АAC"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "workflowId": "{{ $vars.SHIFT_WORKFLOW_ID || 'УКАЖИТЕ_ID_WORKFLOW_СМЕН' }}"
+        },
+        "name": "Execute Shift Workflow",
+        "type": "n8n-nodes-base.executeWorkflow",
+        "typeVersion": 1,
+        "position": [900, 20]
+      },
+      {
+        "parameters": {
+          "workflowId": "{{ $vars.DEFECT_WORKFLOW_ID || 'УКАЖИТЕ_ID_WORKFLOW_ДЕФЕКТОВ' }}"
+        },
+        "name": "Execute Defect Workflow",
+        "type": "n8n-nodes-base.executeWorkflow",
+        "typeVersion": 1,
+        "position": [900, 180]
+      },
+      {
+        "parameters": {
+          "workflowId": "{{ $vars.RECIPE_WORKFLOW_ID || 'УКАЖИТЕ_ID_WORKFLOW_РЕЦЕПТОВ' }}"
+        },
+        "name": "Execute Recipe Workflow",
+        "type": "n8n-nodes-base.executeWorkflow",
+        "typeVersion": 1,
+        "position": [900, 340]
+      },
+      {
+        "parameters": {
+          "workflowId": "{{ $vars.MATERIAL_WORKFLOW_ID || 'УКАЖИТЕ_ID_WORKFLOW_МАТЕРИАЛОВ' }}"
+        },
+        "name": "Execute Material Workflow",
+        "type": "n8n-nodes-base.executeWorkflow",
+        "typeVersion": 1,
+        "position": [900, 500]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$json.chatId}}",
+          "text": "🏭 *Справка по командам завода ААС*\n\n📋 *Основные команды:*\n• `/моя_смена` - Начать/завершить смену, уйти на обед\n• `/рецепт D500` - Найти рецепт по названию\n• `/брак` - Сообщить о дефекте (прикрепите фото)\n• `/загрузка БЦ1 цемент 50` - Загрузить 50 тонн цемента в бункер БЦ1\n• `/остатки` - Показать критические остатки материалов\n\n💡 *Советы:*\n• Используйте кнопки для быстрого доступа\n• При сообщении о браке обязательно прикрепите фото\n• Указывайте точные названия материалов и бункеров\n\n❓ Возникли вопросы? Обратитесь к руководителю смены.",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Send Help",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [900, 660],
+        "credentials": {
+          "telegramApi": {
+            "id": "telegram-bot-credentials",
+            "name": "Telegram Bot АAC"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "chatId": "={{$json.chatId}}",
+          "text": "❌ *Произошла ошибка*\n\nПопробуйте позже или обратитесь к администратору.\n\nОшибка: {{$json.error}}",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Send Error Message",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [900, 820],
+        "credentials": {
+          "telegramApi": {
+            "id": "telegram-bot-credentials",
+            "name": "Telegram Bot АAC"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Telegram Bot Trigger": {
+        "main": [[{"node": "Process Event - FIXED", "type": "main", "index": 0}]]
+      },
+      "Process Event - FIXED": {
+        "main": [[{"node": "Route Events - FIXED", "type": "main", "index": 0}]]
+      },
+      "Route Events - FIXED": {
+        "main": [
+          [{"node": "Send Welcome - ENHANCED", "type": "main", "index": 0}],
+          [{"node": "Execute Shift Workflow", "type": "main", "index": 0}],
+          [{"node": "Execute Defect Workflow", "type": "main", "index": 0}],
+          [{"node": "Execute Recipe Workflow", "type": "main", "index": 0}],
+          [{"node": "Execute Material Workflow", "type": "main", "index": 0}],
+          [{"node": "Send Help", "type": "main", "index": 0}],
+          [{"node": "Send Error Message", "type": "main", "index": 0}]
+        ]
+      }
+    }
+  }

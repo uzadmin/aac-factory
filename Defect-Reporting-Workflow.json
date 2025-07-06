@@ -1,0 +1,260 @@
+{
+  "name": "Defect Reporting Workflow - FIXED",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $json.originalData;\nconst hasPhoto = $json.hasPhoto || false;\n\n// ИСПРАВЛЕНИЕ: Проверяем наличие фото в разных частях сообщения\nif (!hasPhoto && (!originalData.message || !originalData.message.photo || originalData.message.photo.length === 0)) {\n  return { \n    error: 'missing_photo',\n    message: '📸 *Требуется фото дефекта*\\n\\nДля регистрации брака необходимо:\\n\\n1️⃣ Сделать четкое фото дефекта\\n2️⃣ Прикрепить фото к сообщению\\n3️⃣ Добавить описание (опционально)\\n\\n💡 *Пример:* Отправьте фото с подписью \"Трещина на блоке, критично\"'\n  };\n}\n\nconst photo = originalData.message.photo;\nconst caption = originalData.message.caption || 'Без описания';\nconst userId = originalData.message.from.id;\n\n// ИСПРАВЛЕНИЕ: Получаем фото лучшего качества (последнее в массиве)\nconst bestPhoto = photo[photo.length - 1];\n\nlet defectType = 'other';\nlet severity = 'medium';\nlet productionLine = 'Линия 1'; // По умолчанию\n\n// ИСПРАВЛЕНИЕ: Улучшенное определение типа дефекта и критичности\nconst lowerCaption = caption.toLowerCase();\n\nif (lowerCaption.includes('трещина') || lowerCaption.includes('crack')) {\n  defectType = 'crack';\n} else if (lowerCaption.includes('размер') || lowerCaption.includes('габарит') || lowerCaption.includes('size')) {\n  defectType = 'size';\n} else if (lowerCaption.includes('цвет') || lowerCaption.includes('color')) {\n  defectType = 'color';\n} else if (lowerCaption.includes('поверхность') || lowerCaption.includes('surface')) {\n  defectType = 'surface';\n} else if (lowerCaption.includes('прочность') || lowerCaption.includes('strength')) {\n  defectType = 'strength';\n}\n\n// Определение критичности\nif (lowerCaption.includes('критично') || lowerCaption.includes('critical') || lowerCaption.includes('срочно')) {\n  severity = 'critical';\n} else if (lowerCaption.includes('высокий') || lowerCaption.includes('high') || lowerCaption.includes('серьезно')) {\n  severity = 'high';\n} else if (lowerCaption.includes('низкий') || lowerCaption.includes('low') || lowerCaption.includes('незначительно')) {\n  severity = 'low';\n}\n\n// Определение линии производства из описания\nif (lowerCaption.includes('линия 2') || lowerCaption.includes('line 2')) {\n  productionLine = 'Линия 2';\n} else if (lowerCaption.includes('линия 3') || lowerCaption.includes('line 3')) {\n  productionLine = 'Линия 3';\n}\n\nconsole.log(`Обработка дефекта: тип=${defectType}, критичность=${severity}, линия=${productionLine}`);\n\nreturn {\n    telegram_id: userId,\n    defect_type: defectType,\n    severity: severity,\n    description: caption,\n    photo_file_id: bestPhoto.file_id,\n    photo_size: bestPhoto.file_size || 0,\n    production_line: productionLine,\n    error: null\n};"
+      },
+      "name": "Process Defect Data - FIXED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.error}}",
+              "value2": "missing_photo",
+              "operation": "equals"
+            }
+          ]
+        }
+      },
+      "name": "Check Photo Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Photo Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT employee_id, full_name FROM employees WHERE telegram_id = ? AND is_active = 1;",
+        "options": {
+          "parameters": "=[{{$json.telegram_id}}]"
+        }
+      },
+      "name": "Check Employee Exists",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.length}}",
+              "value2": 0,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Employee Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "❌ *Пользователь не найден*\\n\\nВы не зарегистрированы в системе или ваш аккаунт неактивен.\\n\\n📝 Для регистрации обратитесь к:\\n• Руководителю смены\\n• Администратору системы\\n• HR-отделу\\n\\n💡 После регистрации вы сможете сообщать о дефектах.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Employee Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 340]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT shift_id FROM shifts WHERE employee_id = ? AND status IN ('active', 'lunch', 'break') ORDER BY shift_id DESC LIMIT 1;",
+        "options": {
+          "parameters": "=[{{$json[0].employee_id}}]"
+        }
+      },
+      "name": "Get Current Shift",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [1340, 460]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO defects (shift_id, reporter_id, production_line, defect_type, severity, description, photo_file_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'open');",
+        "options": {
+          "parameters": "=[{{$('Get Current Shift').item.json[0] ? $('Get Current Shift').item.json[0].shift_id : null}}, {{$('Check Employee Exists').item.json[0].employee_id}}, \"{{$('Process Defect Data - FIXED').item.json.production_line}}\", \"{{$('Process Defect Data - FIXED').item.json.defect_type}}\", \"{{$('Process Defect Data - FIXED').item.json.severity}}\", \"{{$('Process Defect Data - FIXED').item.json.description}}\", \"{{$('Process Defect Data - FIXED').item.json.photo_file_id}}\"]"
+        }
+      },
+      "name": "Log Defect to MySQL - FIXED",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [1560, 460]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.affectedRows}}",
+              "value2": 0,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Insert Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1780, 460]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "❌ *Ошибка сохранения*\\n\\nНе удалось сохранить информацию о дефекте в базу данных.\\n\\n💡 Попробуйте еще раз или обратитесь к администратору.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Insert Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const defectData = $('Process Defect Data - FIXED').item.json;\nconst employeeData = $('Check Employee Exists').item.json[0];\nconst insertResult = $('Log Defect to MySQL - FIXED').item.json;\n\n// ИСПРАВЛЕНИЕ: Создаем детальное сообщение с подтверждением\nlet severityIcon = '';\nlet severityText = '';\n\nswitch(defectData.severity) {\n  case 'critical':\n    severityIcon = '🔴';\n    severityText = 'КРИТИЧНО';\n    break;\n  case 'high':\n    severityIcon = '🟠';\n    severityText = 'Высокая';\n    break;\n  case 'medium':\n    severityIcon = '🟡';\n    severityText = 'Средняя';\n    break;\n  case 'low':\n    severityIcon = '🟢';\n    severityText = 'Низкая';\n    break;\n  default:\n    severityIcon = '⚪';\n    severityText = 'Не определена';\n}\n\nlet typeText = '';\nswitch(defectData.defect_type) {\n  case 'crack': typeText = 'Трещина'; break;\n  case 'size': typeText = 'Размер'; break;\n  case 'color': typeText = 'Цвет'; break;\n  case 'surface': typeText = 'Поверхность'; break;\n  case 'strength': typeText = 'Прочность'; break;\n  default: typeText = 'Другое';\n}\n\nconst confirmMessage = `✅ *Заявка о браке принята*\\n\\n📋 **Детали заявки:**\\n🏭 Линия: ${defectData.production_line}\\n🔧 Тип дефекта: ${typeText}\\n${severityIcon} Критичность: ${severityText}\\n👤 Сотрудник: ${employeeData.full_name}\\n⏰ Время: ${new Date().toLocaleString('ru-RU')}\\n\\n📝 **Описание:**\\n${defectData.description}\\n\\n🎯 **Следующие шаги:**\\n• Заявка передана в отдел качества\\n• Вы получите уведомление о статусе\\n• При критичных дефектах ожидайте быстрого ответа\\n\\n📞 Вопросы? Обратитесь к руководителю смены.`;\n\nreturn { message: confirmMessage };"
+      },
+      "name": "Format Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [2000, 520]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Confirm Defect Report - ENHANCED",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2220, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const defectData = $('Process Defect Data - FIXED').item.json;\n\n// ИСПРАВЛЕНИЕ: Отправляем уведомления только для критичных дефектов\nif (defectData.severity === 'critical') {\n  return {\n    should_notify: true,\n    notification_message: `🚨 *КРИТИЧНЫЙ ДЕФЕКТ ОБНАРУЖЕН*\\n\\n🏭 Линия: ${defectData.production_line}\\n🔧 Тип: ${defectData.defect_type}\\n📝 Описание: ${defectData.description}\\n⏰ Время: ${new Date().toLocaleString('ru-RU')}\\n\\n⚡ Требуется немедленное вмешательство!`\n  };\n}\n\nreturn { should_notify: false };"
+      },
+      "name": "Check Critical Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [2220, 640]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.should_notify}}",
+              "value2": true,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Should Send Notification",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2440, 640]
+    },
+    {
+      "parameters": {
+        "chatId": "КАЧЕСТВО_КОНТРОЛЬ_ГРУППА_ID",
+        "text": "={{$json.notification_message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Notify Quality Control",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2660, 600]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Process Defect Data - FIXED", "type": "main", "index": 0}]]
+    },
+    "Process Defect Data - FIXED": {
+      "main": [[{"node": "Check Photo Error", "type": "main", "index": 0}]]
+    },
+    "Check Photo Error": {
+      "main": [
+        [{"node": "Send Photo Error", "type": "main", "index": 0}],
+        [{"node": "Check Employee Exists", "type": "main", "index": 0}]
+      ]
+    },
+    "Check Employee Exists": {
+      "main": [[{"node": "Check Employee Found", "type": "main", "index": 0}]]
+    },
+    "Check Employee Found": {
+      "main": [
+        [{"node": "Send Employee Error", "type": "main", "index": 0}],
+        [{"node": "Get Current Shift", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Current Shift": {
+      "main": [[{"node": "Log Defect to MySQL - FIXED", "type": "main", "index": 0}]]
+    },
+    "Log Defect to MySQL - FIXED": {
+      "main": [[{"node": "Check Insert Success", "type": "main", "index": 0}]]
+    },
+    "Check Insert Success": {
+      "main": [
+        [{"node": "Send Insert Error", "type": "main", "index": 0}],
+        [{"node": "Format Confirmation", "type": "main", "index": 0}]
+      ]
+    },
+    "Format Confirmation": {
+      "main": [
+        [{"node": "Confirm Defect Report - ENHANCED", "type": "main", "index": 0}],
+        [{"node": "Check Critical Notification", "type": "main", "index": 0}]
+      ]
+    },
+    "Check Critical Notification": {
+      "main": [[{"node": "Should Send Notification", "type": "main", "index": 0}]]
+    },
+    "Should Send Notification": {
+      "main": [
+        [{"node": "Notify Quality Control", "type": "main", "index": 0}]
+      ]
+    }
+  }
+}

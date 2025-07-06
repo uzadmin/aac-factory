@@ -1,0 +1,171 @@
+{
+  "name": "Recipe Search Workflow - FIXED",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const messageText = $json.messageText || '';\nconst cleanText = messageText.trim();\n\n// ИСПРАВЛЕНИЕ: Улучшенное извлечение поискового запроса\nlet searchTerm = '';\n\nif (cleanText === '📋 рецепты' || cleanText.toLowerCase() === 'рецепты') {\n  // Если просто нажали кнопку \"Рецепты\", показываем все\n  searchTerm = '';\n} else {\n  // Удаляем команду и извлекаем запрос\n  searchTerm = cleanText\n    .replace(/^\\/рецепт\\s*/i, '')\n    .replace(/^\\/recipe\\s*/i, '')\n    .replace(/^рецепт\\s*/i, '')\n    .replace(/^recipe\\s*/i, '')\n    .trim();\n}\n\nif (!searchTerm) {\n  return { \n    show_all: true,\n    message: '📋 *Доступные рецепты*\\n\\nВведите название рецепта для поиска или просмотрите все доступные рецепты ниже.\\n\\n💡 *Пример:* `/рецепт D500` или `/рецепт блок`'\n  };\n}\n\nconsole.log(`Поиск рецепта по запросу: \"${searchTerm}\"`);\nreturn { \n  searchTerm: searchTerm,\n  show_all: false \n};"
+      },
+      "name": "Parse Search Term - FIXED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.show_all}}",
+              "value2": true,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Show All",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT recipe_id, recipe_name, product_code, product_type, cement_kg, lime_kg, sand_kg, water_liters, aluminum_powder_kg, mixing_time_minutes, density_kg_m3, strength_mpa FROM recipes WHERE is_active = 1 ORDER BY recipe_name LIMIT 10;",
+        "options": {}
+      },
+      "name": "Get All Recipes",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CALL SearchRecipes(?)",
+        "options": {
+          "parameters": "=[{{$json.searchTerm}}]"
+        }
+      },
+      "name": "Search Recipes MySQL",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ИСПРАВЛЕНИЕ: Правильная обработка результатов хранимой процедуры\nconst results = items[0].json;\nlet recipes = [];\n\n// Обрабатываем разные возможные структуры ответа\nif (Array.isArray(results)) {\n  recipes = results;\n} else if (results && results[0] && Array.isArray(results[0])) {\n  recipes = results[0];\n} else if (results && Array.isArray(results.data)) {\n  recipes = results.data;\n}\n\nconsole.log('Найденные рецепты:', JSON.stringify(recipes, null, 2));\n\nif (!recipes || recipes.length === 0) {\n  return { \n    error: true,\n    message: '🔍 *Рецепты не найдены*\\n\\nПо вашему запросу ничего не найдено.\\n\\n💡 *Попробуйте:*\\n• Проверить правильность написания\\n• Использовать часть названия\\n• Искать по типу продукта (блок, панель)\\n\\n📋 Для просмотра всех рецептов отправьте `/рецепт`'\n  };\n}\n\nlet message = '📋 *Найденные рецепты:*\\n\\n';\n\nfor (let i = 0; i < recipes.length && i < 5; i++) {\n  const recipe = recipes[i];\n  \n  message += `🏗️ **${recipe.recipe_name}**\\n`;\n  \n  if (recipe.product_code) {\n    message += `📋 Код: ${recipe.product_code}\\n`;\n  }\n  \n  if (recipe.density_kg_m3) {\n    message += `⚖️ Плотность: ${recipe.density_kg_m3} кг/м³\\n`;\n  }\n  \n  message += `\\n*Состав на 1 м³:*\\n`;\n  message += `• 🏗️ Цемент: ${recipe.cement_kg} кг\\n`;\n  message += `• 🏔️ Известь: ${recipe.lime_kg} кг\\n`;\n  message += `• 🏖️ Песок: ${recipe.sand_kg} кг\\n`;\n  message += `• 💧 Вода: ${recipe.water_liters} л\\n`;\n  message += `• ✨ Алюминий: ${recipe.aluminum_powder_kg} кг\\n`;\n  \n  if (recipe.mixing_time_minutes) {\n    message += `⏱️ Время смешивания: ${recipe.mixing_time_minutes} мин\\n`;\n  }\n  \n  if (recipe.strength_mpa) {\n    message += `💪 Прочность: ${recipe.strength_mpa} МПа\\n`;\n  }\n  \n  message += `───────────────\\n`;\n}\n\nif (recipes.length > 5) {\n  message += `\\n📌 Показано первых 5 из ${recipes.length} найденных рецептов.\\nУточните запрос для более точного поиска.`;\n}\n\nreturn { \n  error: false,\n  message: message \n};"
+      },
+      "name": "Format Recipes - FIXED",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.error}}",
+              "value2": true,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Format Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "{\n  \"inline_keyboard\": [\n    [{\"text\": \"🔍 Новый поиск\", \"callback_data\": \"recipe_search_new\"}],\n    [{\"text\": \"📋 Все рецепты\", \"callback_data\": \"recipe_show_all\"}]\n  ]\n}"
+        }
+      },
+      "name": "Send Error Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1560, 240]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "{\n  \"inline_keyboard\": [\n    [{\"text\": \"🔍 Поиск рецепта\", \"callback_data\": \"recipe_search_new\"}],\n    [{\"text\": \"💾 Сохранить рецепт\", \"callback_data\": \"recipe_save\"}]\n  ]\n}"
+        }
+      },
+      "name": "Send Recipe Result - ENHANCED",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1560, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchTerm = $('Parse Search Term - FIXED').item.json.searchTerm || '';\n\n// ИСПРАВЛЕНИЕ: Создаем интерактивное сообщение с помощью\nconst helpMessage = `📋 *Поиск рецептов ААС*\\n\\n🔍 **Как искать:**\\n• `/рецепт D500` - поиск по плотности\\n• `/рецепт блок` - поиск по типу\\n• `/рецепт B2.5` - поиск по прочности\\n• `/рецепт` - показать все рецепты\\n\\n💡 **Советы:**\\n• Используйте часть названия для поиска\\n• Ищите по коду продукта\\n• Указывайте тип материала\\n\\n📝 **Пример запроса:**\\n\\\"Найти рецепт для блоков плотностью D500\\\"\\n➡️ \`/рецепт D500\``;\n\nreturn { message: helpMessage };"
+      },
+      "name": "Create Help Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$input.item.json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "{\n  \"inline_keyboard\": [\n    [{\"text\": \"📋 Показать все рецепты\", \"callback_data\": \"recipe_show_all\"}],\n    [{\"text\": \"🔍 Пример поиска\", \"callback_data\": \"recipe_example\"}]\n  ]\n}"
+        }
+      },
+      "name": "Send Help Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1120, 100]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Parse Search Term - FIXED", "type": "main", "index": 0}]]
+    },
+    "Parse Search Term - FIXED": {
+      "main": [[{"node": "Check Show All", "type": "main", "index": 0}]]
+    },
+    "Check Show All": {
+      "main": [
+        [{"node": "Create Help Message", "type": "main", "index": 0}],
+        [{"node": "Search Recipes MySQL", "type": "main", "index": 0}]
+      ]
+    },
+    "Create Help Message": {
+      "main": [[{"node": "Send Help Message", "type": "main", "index": 0}]]
+    },
+    "Get All Recipes": {
+      "main": [[{"node": "Format Recipes - FIXED", "type": "main", "index": 0}]]
+    },
+    "Search Recipes MySQL": {
+      "main": [[{"node": "Format Recipes - FIXED", "type": "main", "index": 0}]]
+    },
+    "Format Recipes - FIXED": {
+      "main": [[{"node": "Check Format Error", "type": "main", "index": 0}]]
+    },
+    "Check Format Error": {
+      "main": [
+        [{"node": "Send Error Message", "type": "main", "index": 0}],
+        [{"node": "Send Recipe Result - ENHANCED", "type": "main", "index": 0}]
+      ]
+    }
+  }
+}

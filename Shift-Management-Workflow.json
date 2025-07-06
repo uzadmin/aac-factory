@@ -1,0 +1,506 @@
+{
+    "name": "Shift Management Workflow - FIXED",
+    "nodes": [
+      {
+        "parameters": {},
+        "name": "Start",
+        "type": "n8n-nodes-base.start",
+        "typeVersion": 1,
+        "position": [240, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "const callbackData = $json.callbackData || '';\nconst messageText = ($json.messageText || '').toLowerCase().trim();\nlet action = 'status'; // default action\n\n// ИСПРАВЛЕНИЕ: Улучшенное определение действий\nif (callbackData === 'shift_start') {\n  action = 'start';\n} else if (callbackData === 'shift_end') {\n  action = 'end';\n} else if (callbackData === 'shift_lunch') {\n  action = 'lunch';\n} else if (callbackData === 'shift_return') {\n  action = 'return_from_lunch';\n} else if (messageText.includes('смена') || messageText === '📊 моя смена') {\n  action = 'status';\n}\n\nconsole.log(`Определено действие смены: ${action}`);\nreturn { ...$input.item.json, action: action };"
+        },
+        "name": "Determine Action - FIXED",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [460, 300]
+      },
+      {
+        "parameters": {
+          "operation": "get",
+          "key": "=shift:{{$json.userId}}:current"
+        },
+        "name": "Check Current Shift Redis",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [680, 300],
+        "credentials": {
+          "redis": {
+            "id": "redis-credentials",
+            "name": "Redis Local"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "string": [
+              {
+                "value1": "={{$('Determine Action - FIXED').item.json.action}}",
+                "value2": "start",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$('Determine Action - FIXED').item.json.action}}",
+                "value2": "end",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$('Determine Action - FIXED').item.json.action}}",
+                "value2": "lunch",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$('Determine Action - FIXED').item.json.action}}",
+                "value2": "return_from_lunch",
+                "operation": "equals"
+              },
+              {
+                "value1": "={{$('Determine Action - FIXED').item.json.action}}",
+                "value2": "status",
+                "operation": "equals"
+              }
+            ]
+          }
+        },
+        "name": "Route Shift Action",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 1,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT COUNT(*) as active_count FROM shifts WHERE employee_id = (SELECT employee_id FROM employees WHERE telegram_id = ?) AND status IN ('active', 'break', 'lunch');",
+          "options": {
+            "parameters": "=[{{$('Determine Action - FIXED').item.json.userId}}]"
+          }
+        },
+        "name": "Check Existing Active Shift",
+        "type": "n8n-nodes-base.mySql",
+        "typeVersion": 1,
+        "position": [1120, -120]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "number": [
+              {
+                "value1": "={{$json[0].active_count}}",
+                "value2": 0,
+                "operation": "larger"
+              }
+            ]
+          }
+        },
+        "name": "Check Has Active Shift",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [1340, -120]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "⚠️ *У вас уже есть активная смена*\\n\\nЗавершите текущую смену перед началом новой.\\n\\n💡 Используйте команду `/моя_смена` для управления текущей сменой.",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Send Already Active Error",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [1560, -180]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "INSERT INTO shifts (employee_id, shift_date, start_time, status) SELECT employee_id, CURDATE(), NOW(), 'active' FROM employees WHERE telegram_id = ?;",
+          "options": {
+            "parameters": "=[{{$('Determine Action - FIXED').item.json.userId}}]"
+          }
+        },
+        "name": "Start New Shift MySQL",
+        "type": "n8n-nodes-base.mySql",
+        "typeVersion": 1,
+        "position": [1560, -60]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT shift_id, start_time FROM shifts WHERE employee_id = (SELECT employee_id FROM employees WHERE telegram_id = ?) AND status = 'active' ORDER BY shift_id DESC LIMIT 1;",
+          "options": {
+            "parameters": "=[{{$('Determine Action - FIXED').item.json.userId}}]"
+          }
+        },
+        "name": "Get New Shift Info",
+        "type": "n8n-nodes-base.mySql",
+        "typeVersion": 1,
+        "position": [1780, -60]
+      },
+      {
+        "parameters": {
+          "operation": "set",
+          "key": "=shift:{{$('Determine Action - FIXED').item.json.userId}}:current",
+          "value": "={{JSON.stringify({ shift_id: $json[0].shift_id, start_time: $json[0].start_time, status: 'active' })}}",
+          "options": {
+            "ttl": 43200
+          }
+        },
+        "name": "Cache New Shift Data",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [2000, -60]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ИСПРАВЛЕНИЕ: Безопасная проверка данных Redis\nconst redisValue = $('Check Current Shift Redis').item.json.value;\n\nif (!redisValue || redisValue === null) {\n  return {\n    error: true,\n    message: '❌ *Нет активной смены для завершения*\\n\\nВы можете начать новую смену, нажав соответствующую кнопку.'\n  };\n}\n\ntry {\n  const shiftData = JSON.parse(redisValue);\n  if (!shiftData.shift_id) {\n    throw new Error('Некорректные данные смены');\n  }\n  return {\n    error: false,\n    shift_id: shiftData.shift_id\n  };\n} catch (parseError) {\n  console.error('Ошибка парсинга данных смены:', parseError);\n  return {\n    error: true,\n    message: '❌ *Ошибка данных смены*\\n\\nОбратитесь к администратору для исправления данных смены.'\n  };\n}"
+        },
+        "name": "Validate End Shift Data",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [1120, 80]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{$json.error}}",
+                "value2": true,
+                "operation": "equal"
+              }
+            ]
+          }
+        },
+        "name": "Check End Validation",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [1340, 80]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "={{$json.message}}",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Send End Error",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [1560, 20]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE shifts SET end_time = NOW(), status = 'completed' WHERE shift_id = ?;",
+          "options": {
+            "parameters": "=[{{$json.shift_id}}]"
+          }
+        },
+        "name": "End Shift MySQL - FIXED",
+        "type": "n8n-nodes-base.mySql",
+        "typeVersion": 1,
+        "position": [1560, 140]
+      },
+      {
+        "parameters": {
+          "operation": "del",
+          "key": "=shift:{{$('Determine Action - FIXED').item.json.userId}}:current"
+        },
+        "name": "Delete Shift from Redis",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [1780, 140]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "🏁 *Смена успешно завершена*\\n\\n⏰ Время завершения: {{new Date().toLocaleString('ru-RU')}}\\n\\n🎯 Спасибо за продуктивную работу!\\n💼 Хорошего отдыха!",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Notify Shift End - ENHANCED",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [2000, 140]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ИСПРАВЛЕНИЕ: Безопасная проверка данных для обеда\nconst redisValue = $('Check Current Shift Redis').item.json.value;\n\nif (!redisValue || redisValue === null) {\n  return {\n    error: true,\n    message: '❌ *Нет активной смены*\\n\\nНачните смену, чтобы иметь возможность уйти на обед.'\n  };\n}\n\ntry {\n  const shiftData = JSON.parse(redisValue);\n  \n  if (shiftData.status === 'lunch') {\n    return {\n      error: true,\n      message: '🍽️ *Вы уже на обеде*\\n\\nИспользуйте кнопку \"Вернуться с обеда\" для продолжения работы.'\n    };\n  }\n  \n  return {\n    error: false,\n    shift_data: shiftData\n  };\n} catch (parseError) {\n  return {\n    error: true,\n    message: '❌ *Ошибка данных смены*\\n\\nОбратитесь к администратору.'\n  };\n}"
+        },
+        "name": "Validate Lunch Data",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [1120, 280]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{$json.error}}",
+                "value2": true,
+                "operation": "equal"
+              }
+            ]
+          }
+        },
+        "name": "Check Lunch Validation",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [1340, 280]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "={{$json.message}}",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Send Lunch Error",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [1560, 220]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE shifts SET status = 'lunch', break_minutes = break_minutes + 60 WHERE shift_id = ?;",
+          "options": {
+            "parameters": "=[{{$json.shift_data.shift_id}}]"
+          }
+        },
+        "name": "Set Lunch in MySQL",
+        "type": "n8n-nodes-base.mySql",
+        "typeVersion": 1,
+        "position": [1560, 340]
+      },
+      {
+        "parameters": {
+          "operation": "set",
+          "key": "=shift:{{$('Determine Action - FIXED').item.json.userId}}:current",
+          "value": "={{JSON.stringify({ ...JSON.parse($('Check Current Shift Redis').item.json.value), status: 'lunch' })}}",
+          "options": {
+            "ttl": 43200
+          }
+        },
+        "name": "Update Redis to Lunch",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [1780, 340]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "🍽️ *Приятного аппетита!*\\n\\n⏰ Обед начат: {{new Date().toLocaleString('ru-RU')}}\\n⏱️ Рекомендуемое время обеда: 60 минут\\n\\n💡 Не забудьте вернуться и отметить окончание обеда.",
+          "additionalFields": {
+            "parse_mode": "Markdown",
+            "reply_markup": "{\n  \"inline_keyboard\": [\n    [{\"text\": \"✅ Вернуться с обеда\", \"callback_data\": \"shift_return\"}]\n  ]\n}"
+          }
+        },
+        "name": "Confirm Lunch Start",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [2000, 340]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ИСПРАВЛЕНИЕ: Проверка возврата с обеда\nconst redisValue = $('Check Current Shift Redis').item.json.value;\n\nif (!redisValue || redisValue === null) {\n  return {\n    error: true,\n    message: '❌ *Нет активной смены*\\n\\nНачните смену для продолжения работы.'\n  };\n}\n\ntry {\n  const shiftData = JSON.parse(redisValue);\n  \n  if (shiftData.status !== 'lunch') {\n    return {\n      error: true,\n      message: '⚠️ *Вы не на обеде*\\n\\nДанная команда доступна только во время обеда.'\n    };\n  }\n  \n  return {\n    error: false,\n    shift_data: shiftData\n  };\n} catch (parseError) {\n  return {\n    error: true,\n    message: '❌ *Ошибка данных смены*\\n\\nОбратитесь к администратору.'\n  };\n}"
+        },
+        "name": "Validate Return Data",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [1120, 480]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{$json.error}}",
+                "value2": true,
+                "operation": "equal"
+              }
+            ]
+          }
+        },
+        "name": "Check Return Validation",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [1340, 480]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "={{$json.message}}",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Send Return Error",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [1560, 420]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE shifts SET status = 'active' WHERE shift_id = ?;",
+          "options": {
+            "parameters": "=[{{$json.shift_data.shift_id}}]"
+          }
+        },
+        "name": "Return from Lunch in MySQL",
+        "type": "n8n-nodes-base.mySql",
+        "typeVersion": 1,
+        "position": [1560, 540]
+      },
+      {
+        "parameters": {
+          "operation": "set",
+          "key": "=shift:{{$('Determine Action - FIXED').item.json.userId}}:current",
+          "value": "={{JSON.stringify({ ...JSON.parse($('Check Current Shift Redis').item.json.value), status: 'active' })}}",
+          "options": {
+            "ttl": 43200
+          }
+        },
+        "name": "Update Redis to Active",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [1780, 540]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "💼 *Добро пожаловать обратно!*\\n\\n⏰ Возврат с обеда: {{new Date().toLocaleString('ru-RU')}}\\n🎯 Статус: Активная работа\\n\\n💪 Продуктивной работы!",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "name": "Confirm Return from Lunch",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [2000, 540]
+      },
+      {
+        "parameters": {
+          "jsCode": "// ИСПРАВЛЕНИЕ: Безопасная обработка статуса смены\nconst redisValue = $('Check Current Shift Redis').item.json.value;\n\nif (!redisValue || redisValue === null || redisValue === '') {\n  return { \n    text: '❌ *Нет активной смены*\\n\\nВы не находитесь на смене. Начните новую смену для работы.', \n    reply_markup: { \n      inline_keyboard: [\n        [{\"text\": \"🟢 Начать смену\", \"callback_data\": \"shift_start\"}]\n      ] \n    }\n  };\n}\n\ntry {\n  const redisData = JSON.parse(redisValue);\n  \n  if (!redisData.shift_id || !redisData.start_time) {\n    throw new Error('Неполные данные смены');\n  }\n\n  const startTime = new Date(redisData.start_time);\n  const currentTime = new Date();\n  const diffMs = currentTime - startTime;\n  \n  const hoursWorked = Math.floor(diffMs / (1000 * 60 * 60));\n  const minutesWorked = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));\n  \n  let statusText = '💼 *Информация о смене*\\n\\n';\n  statusText += `🕒 Начало: ${startTime.toLocaleString('ru-RU')}\\n`;\n  statusText += `⏱️ На смене: ${hoursWorked}ч ${minutesWorked}мин\\n`;\n  \n  let statusIcon = '';\n  let statusName = '';\n  \n  switch(redisData.status) {\n    case 'active':\n      statusIcon = '🟢';\n      statusName = 'На рабочем месте';\n      break;\n    case 'lunch':\n      statusIcon = '🍽️';\n      statusName = 'На обеде';\n      break;\n    case 'break':\n      statusIcon = '☕';\n      statusName = 'На перерыве';\n      break;\n    default:\n      statusIcon = '❓';\n      statusName = 'Неизвестный статус';\n  }\n  \n  statusText += `📍 Статус: ${statusIcon} ${statusName}\\n\\n`;\n  \n  let keyboard = [];\n  \n  if (redisData.status === 'active') {\n    keyboard = [\n      [{\"text\": \"🍽️ Уйти на обед\", \"callback_data\": \"shift_lunch\"}],\n      [{\"text\": \"🏁 Завершить смену\", \"callback_data\": \"shift_end\"}]\n    ];\n  } else if (redisData.status === 'lunch') {\n    keyboard = [\n      [{\"text\": \"✅ Вернуться с обеда\", \"callback_data\": \"shift_return\"}],\n      [{\"text\": \"🏁 Завершить смену\", \"callback_data\": \"shift_end\"}]\n    ];\n  } else {\n    keyboard = [\n      [{\"text\": \"🏁 Завершить смену\", \"callback_data\": \"shift_end\"}]\n    ];\n  }\n  \n  return { \n    text: statusText, \n    reply_markup: { inline_keyboard: keyboard } \n  };\n  \n} catch (parseError) {\n  console.error('Ошибка парсинга данных смены:', parseError);\n  return { \n    text: '❌ *Ошибка данных смены*\\n\\nДанные смены повреждены. Обратитесь к администратору или начните новую смену.', \n    reply_markup: { \n      inline_keyboard: [\n        [{\"text\": \"🟢 Начать новую смену\", \"callback_data\": \"shift_start\"}]\n      ] \n    }\n  };\n}"
+        },
+        "name": "Format Shift Status - FIXED",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [1120, 680]
+      },
+      {
+        "parameters": {
+          "chatId": "={{$('Determine Action - FIXED').item.json.chatId}}",
+          "text": "={{$json.text}}",
+          "additionalFields": {
+            "parse_mode": "Markdown",
+            "reply_markup": "={{JSON.stringify($json.reply_markup)}}"
+          }
+        },
+        "name": "Send Shift Status",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [1340, 680],
+        "credentials": {
+          "telegramApi": {
+            "id": "telegram-bot-credentials",
+            "name": "Telegram Bot АAC"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Start": {
+        "main": [[{"node": "Determine Action - FIXED", "type": "main", "index": 0}]]
+      },
+      "Determine Action - FIXED": {
+        "main": [[{"node": "Check Current Shift Redis", "type": "main", "index": 0}]]
+      },
+      "Check Current Shift Redis": {
+        "main": [[{"node": "Route Shift Action", "type": "main", "index": 0}]]
+      },
+      "Route Shift Action": {
+        "main": [
+          [{"node": "Check Existing Active Shift", "type": "main", "index": 0}],
+          [{"node": "Validate End Shift Data", "type": "main", "index": 0}],
+          [{"node": "Validate Lunch Data", "type": "main", "index": 0}],
+          [{"node": "Validate Return Data", "type": "main", "index": 0}],
+          [{"node": "Format Shift Status - FIXED", "type": "main", "index": 0}]
+        ]
+      },
+      "Check Existing Active Shift": {
+        "main": [[{"node": "Check Has Active Shift", "type": "main", "index": 0}]]
+      },
+      "Check Has Active Shift": {
+        "main": [
+          [{"node": "Send Already Active Error", "type": "main", "index": 0}],
+          [{"node": "Start New Shift MySQL", "type": "main", "index": 0}]
+        ]
+      },
+      "Start New Shift MySQL": {
+        "main": [[{"node": "Get New Shift Info", "type": "main", "index": 0}]]
+      },
+      "Get New Shift Info": {
+        "main": [[{"node": "Cache New Shift Data", "type": "main", "index": 0}]]
+      },
+      "Cache New Shift Data": {
+        "main": [[{"node": "Format Shift Status - FIXED", "type": "main", "index": 0}]]
+      },
+      "Validate End Shift Data": {
+        "main": [[{"node": "Check End Validation", "type": "main", "index": 0}]]
+      },
+      "Check End Validation": {
+        "main": [
+          [{"node": "Send End Error", "type": "main", "index": 0}],
+          [{"node": "End Shift MySQL - FIXED", "type": "main", "index": 0}]
+        ]
+      },
+      "End Shift MySQL - FIXED": {
+        "main": [[{"node": "Delete Shift from Redis", "type": "main", "index": 0}]]
+      },
+      "Delete Shift from Redis": {
+        "main": [[{"node": "Notify Shift End - ENHANCED", "type": "main", "index": 0}]]
+      },
+      "Validate Lunch Data": {
+        "main": [[{"node": "Check Lunch Validation", "type": "main", "index": 0}]]
+      },
+      "Check Lunch Validation": {
+        "main": [
+          [{"node": "Send Lunch Error", "type": "main", "index": 0}],
+          [{"node": "Set Lunch in MySQL", "type": "main", "index": 0}]
+        ]
+      },
+      "Set Lunch in MySQL": {
+        "main": [[{"node": "Update Redis to Lunch", "type": "main", "index": 0}]]
+      },
+      "Update Redis to Lunch": {
+        "main": [[{"node": "Confirm Lunch Start", "type": "main", "index": 0}]]
+      },
+      "Validate Return Data": {
+        "main": [[{"node": "Check Return Validation", "type": "main", "index": 0}]]
+      },
+      "Check Return Validation": {
+        "main": [
+          [{"node": "Send Return Error", "type": "main", "index": 0}],
+          [{"node": "Return from Lunch in MySQL", "type": "main", "index": 0}]
+        ]
+      },
+      "Return from Lunch in MySQL": {
+        "main": [[{"node": "Update Redis to Active", "type": "main", "index": 0}]]
+      },
+      "Update Redis to Active": {
+        "main": [[{"node": "Confirm Return from Lunch", "type": "main", "index": 0}]]
+      },
+      "Format Shift Status - FIXED": {
+        "main": [[{"node": "Send Shift Status", "type": "main", "index": 0}]]
+      }
+    }
+  }
